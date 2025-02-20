@@ -25,7 +25,7 @@ from urllib.request import urlretrieve
 
 from hanlp_downloader import Downloader
 from hanlp_downloader.log import DownloadCallback
-from pkg_resources import parse_version
+from packaging.version import Version
 
 import hanlp
 from hanlp_common.constant import HANLP_URL, HANLP_VERBOSE
@@ -88,6 +88,13 @@ def tempdir(name=None):
 
 def tempdir_human():
     return tempdir(now_filename())
+
+
+def temp_lock(path):
+    from filelock import FileLock
+    import hashlib
+    lock = FileLock(f"{tempdir()}/.{hashlib.md5(path.encode('utf8')).hexdigest()}.lock")
+    return lock
 
 
 def hanlp_home_default():
@@ -292,6 +299,7 @@ def get_resource(path: str, save_dir=hanlp_home(), extract=True, prefix=HANLP_UR
       The real path to the resource.
 
     """
+    _path = path
     path = hanlp.pretrained.ALL.get(path, path)
     anchor: str = None
     compressed = None
@@ -333,12 +341,17 @@ def get_resource(path: str, save_dir=hanlp_home(), extract=True, prefix=HANLP_UR
         # realpath is where its path after exaction
         if compressed:
             realpath += compressed
-        if not os.path.isfile(realpath):
-            path = download(url=path, save_path=realpath, verbose=verbose)
-        else:
-            path = realpath
+        with temp_lock(path):
+            if not os.path.isfile(realpath):
+                path = download(url=path, save_path=realpath, verbose=verbose)
+            else:
+                path = realpath
     if extract and compressed:
-        path = uncompress(path, verbose=verbose)
+        with temp_lock(path):
+            if os.path.isfile(path):
+                path = uncompress(path, verbose=verbose)
+            else:  # other process must have already decompressed it and deleted it
+                return get_resource(_path, save_dir, extract, prefix, append_location, verbose)
         if anchor:
             path = path_join(path, anchor)
 
@@ -675,7 +688,7 @@ def check_outdated(package='hanlp', version=__version__, repository_url='https:/
     Returns:
         Parsed installed version and latest version.
     """
-    installed_version = parse_version(version)
+    installed_version = Version(version)
     latest_version = get_latest_info_from_pypi(package, repository_url)
     return installed_version, latest_version
 
@@ -683,7 +696,7 @@ def check_outdated(package='hanlp', version=__version__, repository_url='https:/
 def get_latest_info_from_pypi(package='hanlp', repository_url='https://pypi.python.org/pypi/%s/json'):
     url = repository_url % package
     response = urllib.request.urlopen(url).read()
-    return parse_version(json.loads(response)['info']['version'])
+    return Version(json.loads(response)['info']['version'])
 
 
 def check_version_conflicts(extras=None):
